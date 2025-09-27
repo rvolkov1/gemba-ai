@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "object-detection-service"
+version = "0.1.0"
+description = "A FastAPI service for object detection."
+authors = ["zachkaupp@gmail.com"]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.10"
+fastapi = "^0.103.0"
+uvicorn = {extras = ["standard"], version = "^0.23.2"}
+psycopg2-binary = "^2.9.7"
+minio = "^7.1.14"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
