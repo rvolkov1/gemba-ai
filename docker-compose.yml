@@ -80,6 +80,21 @@ services:
     networks:
       - gemba_network
 
+  minio-init:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
+      /usr/bin/mc mb --ignore-existing local/test-data;
+      /usr/bin/mc mb --ignore-existing local/user-data;
+      exit 0;
+      "
+    networks:
+      - gemba_network
+
 # Named volumes for persistent data
 volumes:
   postgres_data:

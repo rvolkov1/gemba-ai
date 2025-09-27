@@ -12,7 +12,7 @@ RUN $POETRY_HOME/bin/pip install poetry
 
 
 # Copy dependency definition files
-COPY pyproject.toml poetry.lock ./
+COPY pyproject.toml poetry.lock poetry.toml ./
 
 # Install dependencies into the virtual environment. 
 # --no-root: Don't install the project itself, only dependencies.
