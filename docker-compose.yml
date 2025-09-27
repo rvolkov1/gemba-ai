@@ -1,0 +1,91 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres_db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # This runs the init.sql script on first startup to create tables.
+      - ./docker-config/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gemba_network
+
+  minio:
+    image: minio/minio:latest
+    container_name: minio_storage
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"  # For the MinIO API
+      - "9001:9001"  # For the MinIO Web Console
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gemba_network
+
+  object_detection:
+    build:
+      context: ./services/object_detection
+      dockerfile: Dockerfile
+    container_name: object_detection_service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+      MINIO_ENDPOINT: "minio:9000"
+      MINIO_ACCESS_KEY: "${MINIO_ROOT_USER}"
+      MINIO_SECRET_KEY: "${MINIO_ROOT_PASSWORD}"
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mounts the source code for live-reloading during development
+      - ./services/object_detection/src:/app/src
+    networks:
+      - gemba_network
+
+  cli_app:
+    build:
+      context: ./services/cli_app
+      dockerfile: Dockerfile
+    container_name: cli_app
+    depends_on:
+      - object_detection
+    environment:
+      API_ENDPOINT: "http://object_detection:8000"
+    # Keep stdin open to allow for interactive commands
+    stdin_open: true
+    tty: true
+    networks:
+      - gemba_network
+
+# Named volumes for persistent data
+volumes:
+  postgres_data:
+  minio_data:
+
+# Custom network for service-to-service communication
+networks:
+  gemba_network:
+    driver: bridge
