@@ -10,8 +10,6 @@ WORKDIR /app
 RUN python -m venv $POETRY_HOME
 RUN $POETRY_HOME/bin/pip install poetry
 
-# Configure poetry to create the venv in the project directory
-RUN poetry config virtualenvs.in-project true
 
 # Copy dependency definition files
 COPY pyproject.toml poetry.lock ./
