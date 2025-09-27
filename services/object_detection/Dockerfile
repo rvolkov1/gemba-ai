@@ -1,5 +1,5 @@
 # Stage 1: Build the virtual environment with Poetry
-FROM python:3.10-slim AS builder
+FROM python:3.13-slim AS builder
 
 ENV POETRY_HOME="/opt/poetry"
 ENV PATH="$POETRY_HOME/bin:$PATH"
@@ -22,7 +22,7 @@ COPY pyproject.toml poetry.lock ./
 RUN poetry install --no-root
 
 # Stage 2: Create the final, lean image
-FROM python:3.10-slim
+FROM python:3.13-slim
 
 ENV VIRTUAL_ENV=/app/.venv
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
