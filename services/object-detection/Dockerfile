@@ -7,7 +7,7 @@ ENV PATH="$POETRY_HOME/bin:$PATH"
 WORKDIR /app
 
 # Install system dependencies required by OpenCV
-RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0
+RUN apt-get update && apt-get install -y --no-install-recommends python3-opencv
 
 # Install poetry
 RUN python -m venv $POETRY_HOME
@@ -38,6 +38,9 @@ COPY --from=builder /app/.venv ./.venv
 
 # Copy the application source code
 COPY src/ ./src
+
+# Install system dependencies required by OpenCV
+RUN apt-get update && apt-get install -y --no-install-recommends python3-opencv
 
 # The command to run the FastAPI application using uvicorn
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]

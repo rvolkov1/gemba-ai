@@ -43,9 +43,14 @@ def cli(ctx):
                 # Use shlex to handle quoted arguments
                 args = shlex.split(command)
                 
-                # Find and invoke the command
-                cmd_name, cmd, args = cli.resolve_command(ctx, args)
-                ctx.invoke(cmd, *args)
+                try:
+                    cli.main(args=args, standalone_mode=False)
+                except SystemExit:
+                    # click.main() calls sys.exit() by default, 
+                    # which we don't want in an interactive loop.
+                    # standalone_mode=False prevents this for most cases, 
+                    # but some errors might still raise SystemExit.
+                    pass
 
             except click.exceptions.UsageError as e:
                 click.echo(e)
@@ -68,11 +73,6 @@ def healthcheck():
     except requests.exceptions.RequestException as e:
         click.echo(click.style(f"API is unreachable: {e}", fg="red"))
 
-
-
-if __name__ == "__main__":
-    # Pass arguments from sys.argv to the CLI
-    cli(sys.argv[1:])
 
 @cli.group()
 def minio():
@@ -124,3 +124,6 @@ def process(bucket_name, object_name):
     except Exception as e:
         click.echo(click.style(f"An unexpected error occurred: {e}", fg="red"))
 
+if __name__ == "__main__":
+    # Pass arguments from sys.argv to the CLI
+    cli(sys.argv[1:])
