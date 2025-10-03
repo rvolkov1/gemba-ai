@@ -6,6 +6,9 @@ ENV PATH="$POETRY_HOME/bin:$PATH"
 
 WORKDIR /app
 
+# Install system dependencies required by OpenCV
+RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0
+
 # Install poetry
 RUN python -m venv $POETRY_HOME
 RUN $POETRY_HOME/bin/pip install poetry
@@ -20,7 +23,7 @@ COPY pyproject.toml poetry.lock poetry.toml ./
 RUN poetry install --no-root
 
 # Pre-download RF-DETR Nano model weights
-RUN python -c "from rfdetr import RFDETRNano; model = RFDETRNano()"
+RUN poetry run python -c "from rfdetr import RFDETRNano; model = RFDETRNano()"
 
 # Stage 2: Create the final, lean image
 FROM python:3.13-slim

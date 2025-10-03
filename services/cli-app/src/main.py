@@ -73,3 +73,54 @@ def healthcheck():
 if __name__ == "__main__":
     # Pass arguments from sys.argv to the CLI
     cli(sys.argv[1:])
+
+@cli.group()
+def minio():
+    """Commands for interacting with MinIO storage."""
+    pass
+
+@minio.command()
+@click.argument('bucket_name')
+def list(bucket_name):
+    """Lists objects in a specified MinIO bucket."""
+    if not minio_client:
+        click.echo(click.style("MinIO client not initialized. Please check your connection settings.", fg="red"))
+        return
+
+    try:
+        click.echo(f"Listing objects in bucket '{bucket_name}':")
+        found = False
+        for obj in minio_client.list_objects(bucket_name, recursive=True):
+            click.echo(f"- {obj.object_name}")
+            found = True
+        if not found:
+            click.echo(click.style(f"No objects found in bucket '{bucket_name}'.", fg="yellow"))
+    except S3Error as e:
+        click.echo(click.style(f"Error listing objects from MinIO: {e}", fg="red"))
+    except Exception as e:
+        click.echo(click.style(f"An unexpected error occurred: {e}", fg="red"))
+
+@minio.command()
+@click.argument('bucket_name')
+@click.argument('object_name')
+def process(bucket_name, object_name):
+    """Triggers object detection for a video file in MinIO."""
+    click.echo(f"Triggering object detection for '{object_name}' in bucket '{bucket_name}'...")
+    try:
+        response = requests.post(
+            f"{API_ENDPOINT}/detect/video_file",
+            params={
+                "bucket_name": bucket_name,
+                "object_name": object_name
+            },
+            timeout=300 # Increased timeout for video processing
+        )
+        response.raise_for_status()
+        data = response.json()
+        click.echo(click.style("Object detection triggered successfully!", fg="green"))
+        click.echo(f"Response: {data}")
+    except requests.exceptions.RequestException as e:
+        click.echo(click.style(f"Error triggering object detection: {e}", fg="red"))
+    except Exception as e:
+        click.echo(click.style(f"An unexpected error occurred: {e}", fg="red"))
+
