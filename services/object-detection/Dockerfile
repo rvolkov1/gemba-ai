@@ -19,6 +19,9 @@ COPY pyproject.toml poetry.lock poetry.toml ./
 # --no-dev: Exclude development dependencies.
 RUN poetry install --no-root
 
+# Pre-download RF-DETR Nano model weights
+RUN python -c "from rfdetr import RFDETRNano; model = RFDETRNano()"
+
 # Stage 2: Create the final, lean image
 FROM python:3.13-slim
 

@@ -14,14 +14,17 @@ RUN $POETRY_HOME/bin/pip install poetry
 # Copy dependency definition files
 COPY pyproject.toml poetry.lock poetry.toml ./
 
+# Configure poetry to create the venv in the project directory
+RUN poetry config virtualenvs.in-project true
+
 # Install dependencies into the virtual environment.
 RUN poetry install --no-root
 
 # Stage 2: Create the final, lean image
 FROM python:3.13-slim
 
+# Set the virtual env path
 ENV VIRTUAL_ENV=/app/.venv
-ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 WORKDIR /app
 
@@ -31,5 +34,8 @@ COPY --from=builder /app/.venv ./.venv
 # Copy the application source code
 COPY src/ ./src
 
-# This sets the entrypoint to the CLI script
-ENTRYPOINT ["python", "-u", "src/main.py"]
+# This entrypoint manually sets the PATH and then executes the CMD.
+ENTRYPOINT ["/bin/sh", "-c", "export PATH=\"/app/.venv/bin:$PATH\" && exec \"$@\"", "--"]
+
+# The default command to run is the python script.
+CMD ["python", "-u", "src/main.py"]

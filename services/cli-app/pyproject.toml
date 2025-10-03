@@ -9,6 +9,7 @@ package-mode = false
 python = "^3.13"
 click = "^8.1.7"
 requests = "^2.31.0"
+minio = "^7.1.14"
 
 [build-system]
 requires = ["poetry-core"]

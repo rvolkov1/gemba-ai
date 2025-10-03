@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+import uvicorn
 
 app = FastAPI(
     title="Object Detection API",
@@ -12,3 +13,6 @@ def read_root():
     return {"status": "ok", "message": "Object Detection service is running."}
 
 # You can add more endpoints here for submitting jobs, checking status, etc.
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)

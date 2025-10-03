@@ -1,0 +1,24 @@
+#!/bin/bash
+# This script acts as a wrapper for both managing the Docker Compose environment
+# and running commands within the cli-app service.
+
+set -eu
+
+# If no arguments are provided, default to launching the interactive shell.
+if [ $# -eq 0 ]; then
+    docker-compose run --rm cli-app
+    exit 0
+fi
+
+# Check for special 'up' and 'down' meta-commands.
+if [ "$1" == "up" ]; then
+    echo "Building and starting services in the background..."
+    docker-compose up --build -d
+    echo "Services are up and running."
+elif [ "$1" == "down" ]; then
+    echo "Stopping services..."
+    docker-compose down
+else
+    # Otherwise, pass all arguments to the cli-app service.
+    docker-compose run --rm cli-app python src/main.py "$@"
+fi

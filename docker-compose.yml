@@ -42,11 +42,11 @@ services:
     networks:
       - gemba_network
 
-  object_detection:
+  object-detection:
     build:
-      context: ./services/object_detection
+      context: ./services/object-detection
       dockerfile: Dockerfile
-    container_name: object_detection_service
+    container_name: object-detection_service
     depends_on:
       postgres:
         condition: service_healthy
@@ -61,22 +61,27 @@ services:
       - "8000:8000"
     volumes:
       # Mounts the source code for live-reloading during development
-      - ./services/object_detection/src:/app/src
+      - ./services/object-detection/src:/app/src
     networks:
       - gemba_network
 
-  cli_app:
+  cli-app:
     build:
-      context: ./services/cli_app
+      context: ./services/cli-app
       dockerfile: Dockerfile
-    container_name: cli_app
+    container_name: cli-app
     depends_on:
-      - object_detection
+      - object-detection
     environment:
-      API_ENDPOINT: "http://object_detection:8000"
+      API_ENDPOINT: "http://object-detection:8000"
+      MINIO_ENDPOINT: "minio:9000"
+      MINIO_ACCESS_KEY: "${MINIO_ROOT_USER}"
+      MINIO_SECRET_KEY: "${MINIO_ROOT_PASSWORD}"
     # Keep stdin open to allow for interactive commands
     stdin_open: true
     tty: true
+    volumes:
+      - ./services/cli-app/src:/app/src
     networks:
       - gemba_network
 
