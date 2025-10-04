@@ -31,7 +31,6 @@ except (S3Error) as e:
 def cli(ctx):
     """A CLI to interact with the Gemba AI object detection service."""
     if ctx.invoked_subcommand is None:
-        # No subcommand was provided, so enter interactive mode.
         click.echo("Entering interactive mode. Type 'exit' or 'quit' to leave.")
         
         while True:
@@ -39,34 +38,40 @@ def cli(ctx):
                 command = input("(gemba-cli) > ")
                 if command.lower() in ["exit", "quit"]:
                     break
+
+                if command.strip().lower() in ["help", "--help"]:
+                    click.echo(ctx.get_help())
+                    continue
                 
-                # Use shlex to handle quoted arguments
                 args = shlex.split(command)
                 
+                # Convert 'help' as the last argument to '--help' for subcommands
+                if args and args[-1].lower() == 'help':
+                    args[-1] = '--help'
+
                 try:
                     cli.main(args=args, standalone_mode=False)
                 except SystemExit:
-                    # click.main() calls sys.exit() by default, 
-                    # which we don't want in an interactive loop.
-                    # standalone_mode=False prevents this for most cases, 
-                    # but some errors might still raise SystemExit.
                     pass
 
             except click.exceptions.UsageError as e:
                 click.echo(e)
             except EOFError:
-                # Handle Ctrl+D
                 break
             except Exception as e:
                 click.echo(f"An error occurred: {e}")
 
 @cli.command()
 def healthcheck():
-    """Checks the health of the object detection API."""
+    """Checks the health of the object detection API.
+
+    This command pings the root (/) endpoint of the object detection service.
+    A successful check means the API is running and reachable from the CLI.
+    """
     click.echo(f"Pinging the API at {API_ENDPOINT}...")
     try:
         response = requests.get(API_ENDPOINT, timeout=5)
-        response.raise_for_status()  # Raise an exception for bad status codes
+        response.raise_for_status()
         data = response.json()
         click.echo(click.style("API is healthy!", fg="green"))
         click.echo(f"Response: {data}")
@@ -74,56 +79,71 @@ def healthcheck():
         click.echo(click.style(f"API is unreachable: {e}", fg="red"))
 
 
-@cli.group()
-def minio():
+@cli.group(invoke_without_command=True)
+@click.pass_context
+def minio(ctx):
     """Commands for interacting with MinIO storage."""
-    pass
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
 
-@minio.command()
-@click.argument('bucket_name')
-def list(bucket_name):
-    """Lists objects in a specified MinIO bucket."""
+@minio.command(name='list')
+@click.argument('bucket_name', required=False)
+def list_objects(bucket_name):
+    """Lists all buckets, or objects in a specified bucket."""
     if not minio_client:
         click.echo(click.style("MinIO client not initialized. Please check your connection settings.", fg="red"))
         return
 
     try:
-        click.echo(f"Listing objects in bucket '{bucket_name}':")
-        found = False
-        for obj in minio_client.list_objects(bucket_name, recursive=True):
-            click.echo(f"- {obj.object_name}")
-            found = True
-        if not found:
-            click.echo(click.style(f"No objects found in bucket '{bucket_name}'.", fg="yellow"))
+        if bucket_name is None:
+            click.echo("Available MinIO buckets:")
+            buckets = minio_client.list_buckets()
+            if not buckets:
+                click.echo(click.style("No buckets found.", fg="yellow"))
+            for bucket in buckets:
+                click.echo(f"- {bucket.name}")
+        else:
+            click.echo(f"Listing objects in bucket '{bucket_name}':")
+            found = False
+            for obj in minio_client.list_objects(bucket_name, recursive=True):
+                click.echo(f"- {obj.object_name}")
+                found = True
+            if not found:
+                click.echo(click.style(f"No objects found in bucket '{bucket_name}'.", fg="yellow"))
     except S3Error as e:
-        click.echo(click.style(f"Error listing objects from MinIO: {e}", fg="red"))
+        click.echo(click.style(f"Error communicating with MinIO: {e}", fg="red"))
     except Exception as e:
         click.echo(click.style(f"An unexpected error occurred: {e}", fg="red"))
 
 @minio.command()
-@click.argument('bucket_name')
-@click.argument('object_name')
-def process(bucket_name, object_name):
-    """Triggers object detection for a video file in MinIO."""
-    click.echo(f"Triggering object detection for '{object_name}' in bucket '{bucket_name}'...")
+def process():
+    """Triggers the batch object detection and visualization process.
+
+    This command starts a background task on the object detection service to
+    process all new videos. It identifies "new" videos by checking for
+    video files in the 'user-data' bucket that do not have a corresponding
+    .json result file in the 'user-out' bucket.
+
+    For each new video, two output files are generated:
+    1. A .json file with the raw detection data, placed in 'user-out'.
+    2. A .mp4 video file with detections drawn on it, placed in 'user-out-visual'.
+
+    The command returns immediately after starting the background task.
+    """
+    click.echo("Triggering batch object detection...")
     try:
         response = requests.post(
-            f"{API_ENDPOINT}/detect/video_file",
-            params={
-                "bucket_name": bucket_name,
-                "object_name": object_name
-            },
-            timeout=300 # Increased timeout for video processing
+            f"{API_ENDPOINT}/detect/batch",
+            timeout=300
         )
         response.raise_for_status()
         data = response.json()
-        click.echo(click.style("Object detection triggered successfully!", fg="green"))
-        click.echo(f"Response: {data}")
+        click.echo(click.style("Batch detection process started in the background.", fg="green"))
+        click.echo(f"API Response: {data['message']}")
     except requests.exceptions.RequestException as e:
         click.echo(click.style(f"Error triggering object detection: {e}", fg="red"))
     except Exception as e:
         click.echo(click.style(f"An unexpected error occurred: {e}", fg="red"))
 
 if __name__ == "__main__":
-    # Pass arguments from sys.argv to the CLI
     cli(sys.argv[1:])

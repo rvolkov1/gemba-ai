@@ -1,16 +1,17 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 import uvicorn
 import os
 from minio import Minio
 from minio.error import S3Error
 from rfdetr import RFDETRNano
+from rfdetr.util.coco_classes import COCO_CLASSES
 import cv2
 import numpy as np
 import tempfile
 import shutil
 from typing import List, Dict, Any
 import json
-from datetime import datetime
+import io
 
 app = FastAPI(
     title="Object Detection API",
@@ -18,13 +19,16 @@ app = FastAPI(
     version="0.1.0"
 )
 
-# MinIO Configuration
+# --- Constants & Configuration ---
 MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "minio:9000")
 MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "minioadmin")
 MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "miniodevpassword")
-RESULTS_BUCKET_NAME = "detection-results"
+USER_DATA_BUCKET_NAME = "user-data"
+USER_OUT_BUCKET_NAME = "user-out"
+USER_OUT_VISUAL_BUCKET_NAME = "user-out-visual"
+BATCH_SIZE = 16 # Process 16 frames at a time for efficiency
 
-# Initialize MinIO client
+# --- Service Initialization ---
 try:
     minio_client = Minio(
         MINIO_ENDPOINT,
@@ -36,7 +40,6 @@ except S3Error as e:
     print(f"Error connecting to MinIO: {e}")
     minio_client = None
 
-# Initialize RF-DETR Model
 try:
     rfdetr_model = RFDETRNano()
     print("RF-DETR Nano model loaded successfully.")
@@ -44,98 +47,160 @@ except Exception as e:
     print(f"Error loading RF-DETR Nano model: {e}")
     rfdetr_model = None
 
-@app.get("/")
-def read_root():
-    """A simple health check endpoint."""
-    return {"status": "ok", "message": "Object Detection service is running."}
+# --- Core Processing Logic ---
+def process_batch_results(detections_batch, frame_batch, writer, all_results, start_frame_count):
+    """Helper to process the results of a batch prediction."""
+    for i, detections in enumerate(detections_batch):
+        frame = frame_batch[i]
+        frame_count = start_frame_count + i
+        frame_results = []
 
-@app.post("/detect/video_file")
-async def detect_objects_in_video_file(
-    bucket_name: str,
-    object_name: str
-) -> Dict[str, Any]:
-    """Detects objects in a video file stored in MinIO and saves results to MinIO."""
-    if not minio_client:
-        raise HTTPException(status_code=500, detail="MinIO client not initialized.")
-    if not rfdetr_model:
-        raise HTTPException(status_code=500, detail="RF-DETR model not loaded.")
+        if detections and detections.xyxy is not None:
+            for j in range(len(detections.xyxy)):
+                x1, y1, x2, y2 = detections.xyxy[j]
+                class_id = detections.class_id[j]
+                confidence = detections.confidence[j]
+                frame_results.append({
+                    "frame": frame_count,
+                    "bbox": [float(x1), float(y1), float(x2), float(y2)],
+                    "class_id": int(class_id),
+                    "confidence": float(confidence)
+                })
 
-    temp_dir = None
+                # Draw on the frame for the visualized video
+                label = f"{COCO_CLASSES[class_id]}: {confidence:.2f}"
+                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+                cv2.putText(frame, label, (int(x1), int(y1) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        
+        all_results.append(frame_results)
+        writer.write(frame)
+
+def process_and_visualize_video(object_name: str):
+    """Processes a video in batches, saves raw data, and creates a visualized video."""
+    if not minio_client or not rfdetr_model:
+        print("MinIO client or model not initialized. Skipping processing.")
+        return
+
+    temp_dir = tempfile.mkdtemp()
     try:
-        # 1. Create a temporary directory for the video file
-        temp_dir = tempfile.mkdtemp()
-        video_path = os.path.join(temp_dir, object_name)
+        input_video_path = os.path.join(temp_dir, object_name)
+        output_video_path = os.path.join(temp_dir, f"viz_{object_name}")
 
-        # 2. Download video from MinIO
-        try:
-            minio_client.fget_object(bucket_name, object_name, video_path)
-        except S3Error as e:
-            raise HTTPException(status_code=404, detail=f"Error downloading video from MinIO: {e}")
+        minio_client.fget_object(USER_DATA_BUCKET_NAME, object_name, input_video_path)
 
-        # 3. Process video frame by frame
-        cap = cv2.VideoCapture(video_path)
+        cap = cv2.VideoCapture(input_video_path)
         if not cap.isOpened():
-            raise HTTPException(status_code=500, detail="Error opening video file.")
+            print(f"Error opening video file: {object_name}")
+            return
 
-        results = []
+        frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        writer = cv2.VideoWriter(output_video_path, fourcc, fps, (frame_width, frame_height))
+
+        all_results = []
         frame_count = 0
+        frame_batch = []
+        rgb_frame_batch = []
+
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
 
-            # RF-DETR expects RGB images, OpenCV reads BGR
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame_batch.append(frame)
+            rgb_frame_batch.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
-            # Perform inference
-            detections = rfdetr_model.predict(images=[rgb_frame])
+            if len(frame_batch) == BATCH_SIZE:
+                detections_batch = rfdetr_model.predict(images=rgb_frame_batch, threshold=0.5)
+                process_batch_results(detections_batch, frame_batch, writer, all_results, frame_count)
+                frame_count += len(frame_batch)
+                frame_batch.clear()
+                rgb_frame_batch.clear()
 
-            frame_results = []
-            if detections and len(detections) > 0:
-                for i in range(len(detections[0].xyxy)):
-                    x1, y1, x2, y2 = detections[0].xyxy[i]
-                    class_id = detections[0].class_id[i]
-                    confidence = detections[0].confidence[i]
-                    frame_results.append({
-                        "frame": frame_count,
-                        "bbox": [float(x1), float(y1), float(x2), float(y2)],
-                        "class_id": int(class_id),
-                        "confidence": float(confidence)
-                    })
-            results.append(frame_results)
-            frame_count += 1
+        # Process any remaining frames that didn't form a full batch
+        if frame_batch:
+            detections_batch = rfdetr_model.predict(images=rgb_frame_batch, threshold=0.5)
+            process_batch_results(detections_batch, frame_batch, writer, all_results, frame_count)
 
         cap.release()
+        writer.release()
 
-        # 4. Save results to MinIO
-        results_json = json.dumps(results, indent=2)
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        results_object_name = f"{os.path.splitext(object_name)[0]}_detection_results_{timestamp}.json"
-
-        # Ensure results bucket exists
-        found = minio_client.bucket_exists(RESULTS_BUCKET_NAME)
-        if not found:
-            minio_client.make_bucket(RESULTS_BUCKET_NAME)
-
+        # Upload JSON results
+        results_json = json.dumps(all_results, indent=2)
+        results_object_name = f"{os.path.splitext(object_name)[0]}.json"
         minio_client.put_object(
-            RESULTS_BUCKET_NAME,
+            USER_OUT_BUCKET_NAME,
             results_object_name,
             data=io.BytesIO(results_json.encode('utf-8')),
             length=len(results_json.encode('utf-8')),
             content_type='application/json'
         )
 
-        return {
-            "status": "success",
-            "message": "Object detection completed and results saved to MinIO.",
-            "results_bucket": RESULTS_BUCKET_NAME,
-            "results_object": results_object_name
-        }
+        # Upload visualized video
+        minio_client.fput_object(
+            USER_OUT_VISUAL_BUCKET_NAME,
+            f"viz_{object_name}",
+            output_video_path,
+            content_type='video/mp4'
+        )
+        print(f"Successfully processed {object_name}. JSON and visualized video saved.")
 
     finally:
-        # 5. Clean up temporary directory
-        if temp_dir and os.path.exists(temp_dir):
+        if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
+
+# --- Background Task & API Endpoints ---
+def run_batch_detection():
+    """The background task for detecting objects in all new videos."""
+    if not minio_client:
+        print("Cannot run batch detection: MinIO client not initialized.")
+        return
+
+    for bucket in [USER_DATA_BUCKET_NAME, USER_OUT_BUCKET_NAME, USER_OUT_VISUAL_BUCKET_NAME]:
+        try:
+            if not minio_client.bucket_exists(bucket):
+                minio_client.make_bucket(bucket)
+        except S3Error as e:
+            print(f"Error ensuring bucket '{bucket}' exists: {e}")
+            return
+
+    try:
+        user_data_files = [obj.object_name for obj in minio_client.list_objects(USER_DATA_BUCKET_NAME, recursive=True)]
+        user_out_files = [obj.object_name for obj in minio_client.list_objects(USER_OUT_BUCKET_NAME, recursive=True)]
+    except S3Error as e:
+        print(f"Error listing objects in MinIO for batch processing: {e}")
+        return
+
+    processed_files_basenames = {os.path.splitext(f)[0] for f in user_out_files}
+    files_to_process = [f for f in user_data_files if os.path.splitext(f)[0] not in processed_files_basenames]
+
+    if not files_to_process:
+        print("No new files to process.")
+        return
+
+    print(f"Starting batch processing for {len(files_to_process)} file(s).")
+    for object_name in files_to_process:
+        try:
+            process_and_visualize_video(object_name)
+        except Exception as e:
+            print(f"An error occurred while processing {object_name}: {e}")
+    print("Batch processing finished.")
+
+@app.get("/")
+def read_root():
+    """A simple health check endpoint."""
+    return {"status": "ok", "message": "Object Detection service is running."}
+
+@app.post("/detect/batch")
+async def detect_batch(background_tasks: BackgroundTasks):
+    """Triggers a background task to detect objects and create visualized videos."""
+    background_tasks.add_task(run_batch_detection)
+    return {
+        "status": "accepted",
+        "message": "Batch detection and visualization process started in the background."
+    }
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
